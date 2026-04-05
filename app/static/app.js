@@ -3377,6 +3377,7 @@ function initSkillViz() {
 /* ── Theme toggle ───────────────────────────────────────── */
 (function initTheme() {
   if (localStorage.getItem("theme") === "light") document.body.classList.add("light");
+  if (localStorage.getItem("sidebarCollapsed") === "1") document.body.classList.add("sidebar-collapsed");
 })();
 
 function bindEvents() {
@@ -3385,6 +3386,32 @@ function bindEvents() {
     const isLight = document.body.classList.toggle("light");
     localStorage.setItem("theme", isLight ? "light" : "dark");
   });
+  // Sidebar collapse toggle
+  $("#sidebar-collapse-btn")?.addEventListener("click", () => {
+    const isCollapsed = document.body.classList.toggle("sidebar-collapsed");
+    localStorage.setItem("sidebarCollapsed", isCollapsed ? "1" : "0");
+  });
+  // Nav item tooltips (fixed to body, bypasses overflow-x:hidden on #sidebar)
+  (function initNavTooltip() {
+    const tip = document.createElement("div");
+    tip.id = "nav-tooltip";
+    document.body.appendChild(tip);
+    let hideTimer = null;
+    document.querySelectorAll(".nav-item[data-label]").forEach(el => {
+      el.addEventListener("mouseenter", e => {
+        if (!document.body.classList.contains("sidebar-collapsed")) return;
+        clearTimeout(hideTimer);
+        const rect = el.getBoundingClientRect();
+        tip.textContent = el.dataset.label;
+        tip.style.left = rect.right + 10 + "px";
+        tip.style.top = rect.top + rect.height / 2 + "px";
+        tip.style.opacity = "1";
+      });
+      el.addEventListener("mouseleave", () => {
+        hideTimer = setTimeout(() => { tip.style.opacity = "0"; }, 80);
+      });
+    });
+  })();
 
   $("#new-agent-btn").addEventListener("click", newAgent);
   $("#add-mcp-btn").addEventListener("click", () => $("#mcp-container").appendChild(buildMcpRow()));

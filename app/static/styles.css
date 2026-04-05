@@ -112,6 +112,60 @@ a { color: inherit; text-decoration: none; }
   flex-direction: column;
   z-index: 100;
   overflow-y: auto;
+  overflow-x: hidden;
+  transition: width 0.22s ease;
+}
+/* Sidebar collapsed state */
+body.sidebar-collapsed { --sidebar-w: 56px; }
+body.sidebar-collapsed .brand-label,
+body.sidebar-collapsed .nav-item span,
+body.sidebar-collapsed .nav-section-label,
+body.sidebar-collapsed .sidebar-status span,
+body.sidebar-collapsed .theme-toggle-label,
+body.sidebar-collapsed .theme-toggle { display: none; }
+body.sidebar-collapsed .nav-item { justify-content: center; padding: 10px; }
+body.sidebar-collapsed .sidebar-brand { justify-content: center; padding: 16px 8px; }
+body.sidebar-collapsed .sidebar-collapse-btn { margin-left: 0; }
+body.sidebar-collapsed .collapse-icon-open  { display: none; }
+body.sidebar-collapsed .collapse-icon-closed { display: block; }
+/* Sidebar toggle button — fixed tab on sidebar right edge */
+.sidebar-collapse-btn {
+  position: fixed;
+  top: 20px;
+  left: calc(var(--sidebar-w) - 1px);
+  width: 18px; height: 32px;
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-left: none;
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  color: var(--text-secondary);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 101;
+  transition: left 0.22s ease, background 0.15s, color 0.15s;
+  padding: 0;
+}
+.sidebar-collapse-btn:hover { background: var(--surface-hover); color: var(--text); }
+.collapse-icon-closed { display: none; }
+/* Nav item tooltip — fixed to body to escape overflow:hidden on #sidebar */
+#nav-tooltip {
+  position: fixed;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-size: 0.8rem;
+  font-weight: 500;
+  padding: 5px 10px;
+  border-radius: var(--radius-sm);
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+  z-index: 9999;
+  box-shadow: var(--shadow-md);
+  transform: translateY(-50%);
 }
 
 .sidebar-brand {
@@ -210,6 +264,7 @@ body.light .theme-toggle-label::before { content: "Dark Mode"; }
 /* ── Main app area ───────────────────────────────────────── */
 #app {
   margin-left: var(--sidebar-w);
+  transition: margin-left 0.22s ease;
   min-height: 100vh;
   padding: 28px 32px 48px;
   display: flex;

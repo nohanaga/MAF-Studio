@@ -500,17 +500,17 @@ async def agent_skill_preview(agent_id: str) -> dict[str, object]:
             for s in skills_data
         )
         advertise_block = (
-            "You have access to skills containing domain-specific knowledge and capabilities.\n"
-            "Each skill provides specialized instructions, reference documents, and assets for specific tasks.\n\n"
+            "あなたはドメイン固有の知識と機能を持つスキルにアクセスできます。\n"
+            "各スキルは特定のタスクに対応した専門的な手順、参考ドキュメント、およびアセットを提供します。\n\n"
             "<available_skills>\n"
             f"{skill_lines}\n"
             "</available_skills>\n\n"
-            "When a task aligns with a skill's domain, follow these steps in exact order:\n"
-            "- Use `load_skill` to retrieve the skill's instructions.\n"
-            "- Follow the provided guidance.\n"
-            "- Use `read_skill_resource` to read any referenced resources.\n"
-            "- Use `run_skill_script` to run referenced scripts.\n"
-            "Only load what is needed, when it is needed."
+            "タスクがスキルのドメインと一致する場合、以下の手順を正確な順番で実行してください:\n"
+            "- `load_skill` を使用してスキルの手順を取得してください。\n"
+            "- 提供されたガイダンスに従ってください。\n"
+            "- `read_skill_resource` を使用して参照されているリソースを読み込んでください。\n"
+            "- `run_skill_script` を使用して参照されているスクリプトを実行してください。\n"
+            "必要なものだけを、必要なときに読み込んでください。"
         )
 
     return {
