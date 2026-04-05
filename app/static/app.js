@@ -1923,6 +1923,8 @@ const sv = {
   toolExecEvents:   [],     // Tool Execution column entries
   sessionMessages:  [],     // Sessions column: reconstructed _cache per agent
   _callQueue:       [],     // FIFO queue of function call names for result pairing
+  customerContext:  {},     // Shared customer context captured from skill results
+  _customerFetched: false,  // True once full profile has been fetched for current customer_id
 };
 
 /* ── Handoff selector ────────────────────────────────────── */
@@ -2186,8 +2188,22 @@ function handleSvSSE(type, data, msgIdx) {
     if (data.text && msg.segments?.length) msg.segments[msg.segments.length - 1].text = data.text;
     msg.agentName = data.agent_name || msg.agentName;
     if (data.current_agent_id) { sv.activeAgentId = data.current_agent_id; updateSvActiveAgent(data.current_agent_id); }
+    if (data.customer_context && Object.keys(data.customer_context).length) {
+      const prevId = sv.customerContext.customer_id;
+      sv.customerContext = { ...sv.customerContext, ...data.customer_context };
+      renderSvCustomerInfo();
+      const newId = sv.customerContext.customer_id;
+      if (newId && newId !== prevId) fetchAndPopulateCustomer(newId);
+    }
     renderSvChatMessages();
     if (h) renderSvGraph(h);
+
+  } else if (type === "customer_context") {
+    const prevId = sv.customerContext.customer_id;
+    sv.customerContext = { ...sv.customerContext, ...data };
+    renderSvCustomerInfo();
+    const newId = sv.customerContext.customer_id;
+    if (newId && newId !== prevId) fetchAndPopulateCustomer(newId);
 
   } else if (type === "error") {
     if (!msg) return;
@@ -2250,6 +2266,125 @@ function renderSvSystemPrompt() {
 
   // Session tab: delegate to dedicated renderer
   renderSvSessionMessages();
+}
+
+/* ── Customer Information renderer ──────────────────────── */
+/* ── Customer profile fetch ──────────────────────────────── */
+async function fetchAndPopulateCustomer(customerId, { force = false } = {}) {
+  if (!customerId) return;
+  // Skip if we already fetched a full profile for this ID (unless forced)
+  if (!force && sv._customerFetched && sv.customerContext.customer_id === customerId) return;
+
+  // Show loading state on reload button
+  const btn = $("#sv-customer-reload-btn");
+  if (btn) { btn.disabled = true; btn.classList.add("loading"); }
+
+  try {
+    const res = await fetch(`/api/customers/${encodeURIComponent(customerId)}`);
+    if (!res.ok) return;
+    const profile = await res.json();
+    // Merge using same shape as update_context_from_output
+    const cust = profile.customer || {};
+    const merged = { ...sv.customerContext, ...cust };
+    if (profile.contracts?.items) {
+      merged.contracts = profile.contracts.items;
+      merged.contract_id = merged.contract_id || (profile.contracts.items[0]?.contract_id || "");
+      merged.product_name = merged.product_name || (profile.contracts.items[0]?.product_name || "");
+    }
+    if (profile.recent_activities?.length) merged.activities = profile.recent_activities;
+    sv.customerContext = merged;
+    sv._customerFetched = true;
+    renderSvCustomerInfo();
+  } catch (_) {
+    // silently ignore network errors
+  } finally {
+    if (btn) { btn.disabled = false; btn.classList.remove("loading"); }
+  }
+}
+
+function renderSvCustomerInfo() {
+  const el = $("#sv-customer-info");
+  if (!el) return;
+  const ctx = sv.customerContext || {};
+
+  // Enable/disable reload button based on whether we have a customer_id
+  const reloadBtn = $("#sv-customer-reload-btn");
+  if (reloadBtn) reloadBtn.disabled = !ctx.customer_id;
+
+  function fval(key) {
+    const v = ctx[key];
+    return (v !== undefined && v !== null && v !== "")
+      ? `<span class="sv-crm-val-text">${esc(String(v))}</span>`
+      : `<span class="sv-crm-val-empty">—</span>`;
+  }
+
+  const PROFILE = [
+    ["顧客ID",    "customer_id"],
+    ["氏名",      "full_name"],
+    ["年齢",      "age"],
+    ["性別",      "gender"],
+    ["都道府県",  "prefecture"],
+    ["職業",      "occupation"],
+    ["年収",      "annual_income"],
+    ["担当者",    "assigned_agent"],
+  ];
+
+  const contracts  = Array.isArray(ctx.contracts)  ? ctx.contracts  : [];
+  const activities = Array.isArray(ctx.activities) ? ctx.activities : [];
+
+  // ── Contract rows ──
+  const contractRows = contracts.length
+    ? contracts.map((c) => {
+        const isActive = c.contract_status === "有効";
+        const premium  = c.monthly_premium ? `¥${Number(c.monthly_premium).toLocaleString()}` : "—";
+        return `<tr class="sv-crm-tr-anim">
+          <td>${esc(c.contract_id    || "—")}</td>
+          <td>${esc(c.product_name   || "—")}</td>
+          <td class="sv-crm-td-num">${premium}</td>
+          <td><span class="sv-crm-status${isActive ? " sv-crm-status-active" : ""}">${esc(c.contract_status || "—")}</span></td>
+        </tr>`;
+      }).join("")
+    : `<tr><td colspan="4" class="sv-crm-td-empty">—</td></tr>`;
+
+  // ── Activity rows ──
+  const activityRows = activities.length
+    ? activities.map((a) => `
+        <div class="sv-crm-activity sv-crm-tr-anim">
+          <div class="sv-crm-activity-meta">
+            <span class="sv-crm-activity-date">${esc(a.activity_date || "")}</span>
+            <span class="sv-crm-activity-type">${esc(a.activity_type || "")}</span>
+          </div>
+          <div class="sv-crm-activity-subject">${esc(a.subject || "")}</div>
+          ${a.outcome ? `<div class="sv-crm-activity-outcome">${esc(a.outcome)}</div>` : ""}
+        </div>`).join("")
+    : `<div class="sv-crm-td-empty">—</div>`;
+
+  const badge = (n) => n ? `<span class="sv-crm-badge">${n}</span>` : "";
+
+  el.innerHTML = `
+  <div class="sv-crm">
+    <div class="sv-crm-section">
+      <div class="sv-crm-section-head">顧客プロフィール</div>
+      <div class="sv-crm-fields">
+        ${PROFILE.map(([label, key]) => `
+          <div class="sv-crm-row${ctx[key] ? " sv-crm-row-filled" : ""}">
+            <span class="sv-crm-label">${label}</span>
+            <span class="sv-crm-value">${fval(key)}</span>
+          </div>`).join("")}
+      </div>
+    </div>
+    <div class="sv-crm-section">
+      <div class="sv-crm-section-head">契約一覧 ${badge(contracts.length)}</div>
+      <table class="sv-crm-table">
+        <thead><tr><th>契約ID</th><th>商品名</th><th>月額</th><th>状態</th></tr></thead>
+        <tbody>${contractRows}</tbody>
+      </table>
+    </div>
+    <div class="sv-crm-section">
+      <div class="sv-crm-section-head">商談履歴 ${badge(activities.length)}</div>
+      <div class="sv-crm-activities">${activityRows}</div>
+    </div>
+  </div>`;
 }
 
 /* ── Session message renderer ────────────────────────────── */
@@ -2435,6 +2570,10 @@ function clearSvTimeline() {
   sv.sessionMessages = [];
   sv._callQueue = [];
   renderSvSessionMessages();
+  // also reset Customer Information panel
+  sv.customerContext = {};
+  sv._customerFetched = false;
+  renderSvCustomerInfo();
 }
 
 /* ── Active agent badge ──────────────────────────────────── */
@@ -2814,6 +2953,12 @@ function initSkillViz() {
 
   // Clear timeline
   $("#sv-clear-timeline-btn")?.addEventListener("click", clearSvTimeline);
+
+  // Customer Information reload button
+  $("#sv-customer-reload-btn")?.addEventListener("click", () => {
+    const cid = sv.customerContext?.customer_id;
+    if (cid) fetchAndPopulateCustomer(cid, { force: true });
+  });
 
   // Panel maximize/restore
   initSvPanelMaximize();

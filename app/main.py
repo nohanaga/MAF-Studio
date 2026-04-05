@@ -15,6 +15,7 @@ from fastapi.templating import Jinja2Templates
 from app.core.config import APP_NAME, BASE_DIR
 from app.models import AgentConfig, AgentTestRequest, HandoffChatRequest, HandoffDefinition, SkillRunRequest, StudioState, WorkflowDefinition, WorkflowTestRequest
 from app.services.agent_runtime import run_agent, stream_agent
+from app.services.customer_service import get_customer_profile
 from app.services.handoff_runtime import clear_session, get_or_create_session, get_session, stream_handoff_turn
 from app.services.skill_runner import discover_skills, run_local_skill_script, save_uploaded_skill
 from app.services.storage import StudioRepository
@@ -302,6 +303,15 @@ async def handoff_chat_stream(payload: HandoffChatRequest) -> StreamingResponse:
 async def delete_handoff_session(session_id: str) -> dict[str, str]:
     clear_session(session_id)
     return {"message": "Session cleared."}
+
+
+@app.get("/api/customers/{customer_id}")
+async def get_customer(customer_id: str) -> dict[str, object]:
+    """Return full customer profile (customer info + contracts + activities)."""
+    profile = get_customer_profile(customer_id)
+    if profile is None:
+        raise HTTPException(status_code=404, detail=f"Customer '{customer_id}' not found")
+    return profile
 
 
 @app.get("/api/agents/{agent_id}/skill-preview")

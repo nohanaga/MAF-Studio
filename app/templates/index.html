@@ -7,7 +7,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=DM+Sans:ital,wght@0,400;0,500;0,600;1,400&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
-    <link rel="stylesheet" href="/static/styles.css?v=20260403k" />
+    <link rel="stylesheet" href="/static/styles.css?v=20260403n" />
   </head>
   <body>
     <!-- ========== Fixed sidebar nav ========== -->
@@ -634,12 +634,14 @@
               <div class="sv-customer-cell panel" data-sv-panel="customer">
                 <div class="panel-head">
                   <h2>Customer Information</h2>
-                  <button class="btn btn-ghost btn-sm sv-maximize-btn" title="Maximize"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg></button>
+                  <div class="panel-head-actions">
+                    <button id="sv-customer-reload-btn" class="btn btn-ghost btn-sm sv-customer-reload-btn" title="顧客情報を最新化" disabled>
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg>
+                    </button>
+                    <button class="btn btn-ghost btn-sm sv-maximize-btn" title="Maximize"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg></button>
+                  </div>
                 </div>
-                <div class="sv-customer-placeholder">
-                  <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
-                  <p>CRM data will appear here (coming soon).</p>
-                </div>
+                <div id="sv-customer-info" class="sv-customer-body"></div>
               </div>
 
               <!-- Chat Interaction (bottom) -->
@@ -688,6 +690,6 @@
       </section>
     </div>
 
-    <script src="/static/app.js?v=20260403k" defer></script>
+    <script src="/static/app.js?v=20260403n" defer></script>
   </body>
 </html>

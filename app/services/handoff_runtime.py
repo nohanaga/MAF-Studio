@@ -77,6 +77,75 @@ def clear_session(session_id: str) -> None:
     _af_sessions.pop(session_id, None)
 
 
+# ── Customer context extraction helper ──────────────────────────────────────
+
+def update_context_from_output(fn_output: str, ctx: dict) -> bool:
+    """Parse *fn_output* (JSON string from a skill result) and update *ctx* in-place.
+
+    Returns True if *ctx* was modified, False otherwise.
+    Exported for unit-testing.
+    """
+    _PROFILE_KEYS = (
+        "customer_id", "full_name", "age", "gender", "occupation",
+        "annual_income", "prefecture", "phone", "email",
+        "segment", "assigned_agent", "birth_date",
+        # kept for backward compat
+        "contract_id", "product_name",
+    )
+
+    def _extract_profile(src: dict) -> bool:
+        nonlocal changed
+        updated = False
+        for key in _PROFILE_KEYS:
+            if key in src and src[key] not in (None, ""):
+                ctx[key] = src[key]
+                updated = True
+        # Compose full_name from last_name + first_name when available
+        ln = src.get("last_name", "").strip()
+        fn = src.get("first_name", "").strip()
+        if ln or fn:
+            ctx["full_name"] = f"{ln} {fn}".strip()
+            updated = True
+        if updated:
+            changed = True
+        return updated
+
+    try:
+        parsed = json.loads(fn_output)
+        if isinstance(parsed, list) and parsed:
+            parsed = parsed[0]
+        if not isinstance(parsed, dict):
+            return False
+        changed = False
+
+        # Flat profile fields
+        _extract_profile(parsed)
+
+        # customer{} nested object (profile_summary)
+        if "customer" in parsed and isinstance(parsed["customer"], dict):
+            _extract_profile(parsed["customer"])
+
+        # contracts.items list (profile_summary)
+        if "contracts" in parsed and isinstance(parsed["contracts"], dict):
+            items = parsed["contracts"].get("items", [])
+            if items and isinstance(items, list):
+                ctx["contracts"] = items
+                # backward-compat flat keys
+                ctx.setdefault("contract_id", items[0].get("contract_id", ""))
+                ctx.setdefault("product_name", items[0].get("product_name", ""))
+                changed = True
+
+        # recent_activities list (profile_summary)
+        if "recent_activities" in parsed and isinstance(parsed["recent_activities"], list):
+            if parsed["recent_activities"]:
+                ctx["activities"] = parsed["recent_activities"]
+                changed = True
+
+        return changed
+    except Exception:
+        return False
+
+
 # ── Handoff tool helpers ─────────────────────────────────────────────────────
 
 class _HandoffRecorder:
@@ -304,29 +373,8 @@ async def stream_handoff_turn(
                             elif not isinstance(fn_output, str):
                                 fn_output = str(fn_output) if fn_output else ""
                             # ── Auto-capture customer context from skill results ──
-                            try:
-                                parsed = json.loads(fn_output)
-                                # lookup_by_name returns a list; take first item
-                                if isinstance(parsed, list) and parsed:
-                                    parsed = parsed[0]
-                                if isinstance(parsed, dict):
-                                    for key in ("customer_id", "full_name", "contract_id"):
-                                        if key in parsed and parsed[key]:
-                                            session.customer_context[key] = parsed[key]
-                                    # items list from profile_summary.contracts
-                                    if "contracts" in parsed and isinstance(parsed["contracts"], dict):
-                                        items = parsed["contracts"].get("items", [])
-                                        if items and "contract_id" not in session.customer_context:
-                                            session.customer_context["contract_id"] = items[0].get("contract_id", "")
-                                            session.customer_context["product_name"] = items[0].get("product_name", "")
-                                    # customer object inside profile_summary
-                                    if "customer" in parsed and isinstance(parsed["customer"], dict):
-                                        cust = parsed["customer"]
-                                        for key in ("customer_id", "full_name"):
-                                            if key in cust and cust[key]:
-                                                session.customer_context[key] = cust[key]
-                            except Exception:
-                                pass
+                            if update_context_from_output(fn_output, session.customer_context):
+                                yield _sse("customer_context", dict(session.customer_context))
                             yield _sse("event", {"type": "function_result.complete", "title": f"Result: {call_name or 'function'}", "detail": fn_output[:300]})
 
                     # ── Text delta ─────────────────────────────────────
@@ -429,4 +477,5 @@ async def stream_handoff_turn(
         "session_id": session.session_id,
         "current_agent_id": session.current_agent_id,
         "is_complete": session.is_complete,
+        "customer_context": dict(session.customer_context),
     })
