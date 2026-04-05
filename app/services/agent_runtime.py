@@ -11,8 +11,7 @@ from typing import Any
 
 from dotenv import load_dotenv
 from agent_framework import Agent, MCPStreamableHTTPTool
-from agent_framework.azure import AzureAIClient
-from agent_framework.openai import OpenAIChatCompletionClient, OpenAIResponsesClient
+from agent_framework.openai import OpenAIChatClient, OpenAIChatCompletionClient
 from azure.identity.aio import DefaultAzureCredential
 
 from app.models import AgentConfig, MCPToolConfig, ModelSettings
@@ -43,7 +42,7 @@ async def _resolve_client(settings: ModelSettings) -> tuple[Any | None, list[Any
         if not api_key:
             issues.append(f"Environment variable '{settings.api_key_env}' is not set.")
             return None, cleanup, issues
-        client = OpenAIResponsesClient(
+        client = OpenAIChatClient(
             model=settings.model,
             api_key=api_key,
             base_url=settings.base_url or None,
@@ -87,6 +86,11 @@ async def _resolve_client(settings: ModelSettings) -> tuple[Any | None, list[Any
         project_endpoint = settings.base_url or os.getenv(settings.project_endpoint_env)
         if not project_endpoint:
             issues.append(f"Foundry requires project endpoint env '{settings.project_endpoint_env}'.")
+            return None, cleanup, issues
+        try:
+            from agent_framework.azure import AzureAIClient  # type: ignore[attr-defined]
+        except (ImportError, AttributeError):
+            issues.append("AzureAIClient not available in this version of agent-framework-core.")
             return None, cleanup, issues
         credential = DefaultAzureCredential()
         cleanup.append(credential)

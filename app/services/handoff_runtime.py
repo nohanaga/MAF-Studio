@@ -1,32 +1,38 @@
-"""Handoff Orchestration runtime.
+"""Handoff Orchestration runtime — uses agent_framework HandoffBuilder.
 
-Each handoff session maintains:
-- Which agent is currently active (current_agent_id).
-- An AgentFramework AgentSession per participant agent so conversation history
-  is preserved inside each agent across turns (via InMemoryHistoryProvider).
-- A shared list of turns for display purposes.
+Key behaviour (matching the original MAF design in _handoff.py):
+- Uses HandoffBuilder which calls clean_conversation_for_handoff() before
+  broadcasting each agent's response to other agents.
+- Tool Call results (function_call / function_result) are stripped from the
+  shared conversation thread; each agent only has its own tool artefacts.
+- Agent A's *text* responses ARE visible to subsequent agents in the chain.
 
-On each user message:
-1. The active agent responds via the real LLM (or local preview if no credentials).
-2. The LLM response is checked for a routing marker ``[HANDOFF:agent_id]`` that
-   the agent can emit when its injected routing instructions say so.
-3. If a handoff is signalled the session switches to the target agent; the marker
-   is stripped from the displayed text.
-4. SSE events are streamed: active_agent, delta, (handoff), done.
+Session flow (stateful workflow object per session):
+  Turn 1:   workflow.run(user_message, stream=True)
+  Turn N+1: workflow.run(responses={request_id: messages}, stream=True)
+
+The HandoffBuilder emits WorkflowEvent objects which are translated here into
+our existing SSE format (active_agent / event / delta / handoff / done /
+customer_context).
 """
 from __future__ import annotations
 
 import asyncio
 import json
-import re
-import textwrap
 from collections.abc import AsyncIterator
+from dataclasses import dataclass, field
+from typing import Any
 
-from agent_framework import Agent, AgentSession as AFSession
+from agent_framework import Agent
+from agent_framework.orchestrations import (
+    HandoffAgentUserRequest,
+    HandoffBuilder,
+    HandoffSentEvent,
+)
+from agent_framework._types import AgentResponseUpdate
 
 from app.models import AgentConfig, HandoffDefinition, HandoffSession, HandoffChatTurn
 from app.services.agent_runtime import (
-    _build_mcp_tools,
     _close_resource,
     _mock_text,
     _resolve_client,
@@ -34,15 +40,26 @@ from app.services.agent_runtime import (
 from app.services.skill_runner import build_skills_provider
 
 
-# ── In-memory session store ─────────────────────────────────────────────────
+# -- Internal workflow state (not exposed to API) ------------------------------
+
+@dataclass
+class _WorkflowState:
+    """Per-session state: holds the Workflow object and auxilary metadata."""
+    workflow: Any                              # agent_framework Workflow
+    pending_request_id: str | None = None      # request_id waiting for next user input
+    name_to_config: dict[str, AgentConfig] = field(default_factory=dict)
+    cleanups: list[Any] = field(default_factory=list)
+    is_mock: bool = False                      # True when falling back to mock mode
+    mock_start_config: AgentConfig | None = None
+
+
+# -- In-memory stores ----------------------------------------------------------
+
 _sessions: dict[str, HandoffSession] = {}
-
-# Per-handoff-session, per-agent AgentFramework sessions so history is retained
-# across turns within a single handoff session.
-_af_sessions: dict[str, dict[str, AFSession]] = {}
+_workflow_states: dict[str, _WorkflowState] = {}
 
 
-# ── Session helpers ─────────────────────────────────────────────────────────
+# -- Session helpers -----------------------------------------------------------
 
 def get_or_create_session(
     handoff_id: str,
@@ -56,16 +73,7 @@ def get_or_create_session(
         current_agent_id=start_agent_id,
     )
     _sessions[sess.session_id] = sess
-    _af_sessions[sess.session_id] = {}
     return sess
-
-
-def _get_af_session(session_id: str, agent_id: str) -> AFSession:
-    """Return (or lazily create) the AgentFramework session for a specific agent."""
-    bucket = _af_sessions.setdefault(session_id, {})
-    if agent_id not in bucket:
-        bucket[agent_id] = AFSession()
-    return bucket[agent_id]
 
 
 def get_session(session_id: str) -> HandoffSession | None:
@@ -74,10 +82,11 @@ def get_session(session_id: str) -> HandoffSession | None:
 
 def clear_session(session_id: str) -> None:
     _sessions.pop(session_id, None)
-    _af_sessions.pop(session_id, None)
+    # Pop workflow state; cleanup is best-effort (clients GC'd if not closed)
+    _workflow_states.pop(session_id, None)
 
 
-# ── Customer context extraction helper ──────────────────────────────────────
+# -- Customer context extraction helper ----------------------------------------
 
 def update_context_from_output(fn_output: str, ctx: dict) -> bool:
     """Parse *fn_output* (JSON string from a skill result) and update *ctx* in-place.
@@ -146,95 +155,84 @@ def update_context_from_output(fn_output: str, ctx: dict) -> bool:
         return False
 
 
-# ── Handoff tool helpers ─────────────────────────────────────────────────────
-
-class _HandoffRecorder:
-    """
-    Stateful object that creates transfer_to_<AgentName>() tool functions.
-    When the LLM calls one of these tools the target agent_id is recorded here.
-    This is more reliable than asking the LLM to emit a text marker.
-    """
-    __slots__ = ("target_agent_id", "handoff_reason")
-
-    def __init__(self) -> None:
-        self.target_agent_id: str | None = None
-        self.handoff_reason: str = ""
-
-    def make_tool(self, target: AgentConfig):
-        """Return a callable tool that records a handoff to *target* when called."""
-        recorder = self
-        safe_name = re.sub(r"[^a-zA-Z0-9_]", "_", target.name)
-        desc_part = f" — {target.description}" if target.description else ""
-
-        def transfer_fn(reason: str = "") -> str:
-            recorder.target_agent_id = target.id
-            recorder.handoff_reason = reason
-            return f"Handoff to {target.name} initiated successfully."
-
-        transfer_fn.__name__ = f"transfer_to_{safe_name}"
-        transfer_fn.__doc__ = (
-            f"Route this conversation to {target.name}{desc_part}. "
-            "Call this instead of answering when the user's need matches this specialist agent. "
-            "REQUIRED: Pass 'reason' with customer_id, full_name, and the user's request. "
-            "Example: reason='customer_id: C016, 氏名: 又吉 佑樹, 用件: 生命保険を解約したい'"
-        )
-        return transfer_fn
-
-
-def _build_routing_instructions(
-    handoff: HandoffDefinition,
-    current_agent_id: str,
-    agents_by_id: dict[str, AgentConfig],
-    visited: set[str] | None = None,
-) -> str:
-    """
-    Append routing instructions to the agent's system prompt, listing the
-    available transfer_to_X functions and when to use them.
-    Agents already in `visited` are excluded to prevent loops.
-    """
-    eligible_rules = [r for r in (handoff.rules or []) if r.source_agent_id == current_agent_id]
-    if not eligible_rules:
-        return ""
-
-    lines: list[str] = []
-    for rule in eligible_rules:
-        for tid in (rule.target_agent_ids or []):
-            if visited and tid in visited:
-                continue  # skip already-visited agents
-            target = agents_by_id.get(tid)
-            if target:
-                safe_name = re.sub(r"[^a-zA-Z0-9_]", "_", target.name)
-                desc = f": {target.description}" if target.description else ""
-                lines.append(f"- `transfer_to_{safe_name}`{desc}")
-
-    if not lines:
-        return ""
-
-    fns = "\n".join(lines)
-    return textwrap.dedent(f"""
-
-    ---
-    ## Routing instructions
-    You have access to transfer functions for routing conversations to specialist agents.
-    When the user's request is better handled by a specialist, call the appropriate
-    transfer function instead of answering yourself.
-
-    Available transfer functions:
-    {fns}
-
-    IMPORTANT: If the request clearly belongs to another agent's domain, call the
-    transfer function. Do not answer questions that are outside your scope.
-    ---
-    """).rstrip()
-
-
-# ── SSE helper ───────────────────────────────────────────────────────────────
+# -- SSE helper ----------------------------------------------------------------
 
 def _sse(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
-# ── Main streaming function ──────────────────────────────────────────────────
+# -- Build workflow state for a new session ------------------------------------
+
+async def _build_workflow_state(
+    handoff: HandoffDefinition,
+    agents_by_id: dict[str, AgentConfig],
+) -> _WorkflowState:
+    """Build HandoffBuilder Workflow. Raises ValueError if no real clients available."""
+    af_agents: list[Agent] = []
+    name_to_config: dict[str, AgentConfig] = {}
+    all_cleanups: list[Any] = []
+
+    for agent_id in handoff.participant_agent_ids:
+        agent_config = agents_by_id.get(agent_id)
+        if not agent_config:
+            continue
+        client, cleanup, _issues = await _resolve_client(agent_config.model)
+        all_cleanups.extend(cleanup)
+        if client is None:
+            # HandoffBuilder requires real clients; skip mock agents
+            continue
+
+        skills_provider = build_skills_provider(agent_config.skill_ids)
+        af_agent = Agent(
+            client=client,
+            name=agent_config.name,
+            description=agent_config.description or None,
+            instructions=agent_config.instructions or "",
+            context_providers=[skills_provider] if skills_provider else None,
+        )
+        af_agents.append(af_agent)
+        name_to_config[agent_config.name] = agent_config
+
+    if not af_agents:
+        raise ValueError("HandoffBuilder requires at least one agent with valid credentials.")
+
+    builder = HandoffBuilder()
+    builder.participants(af_agents)
+
+    # Configure handoff routing from HandoffDefinition.rules
+    if handoff.rules:
+        config_id_to_name = {cfg.id: name for name, cfg in name_to_config.items()}
+        name_to_af = {a.name: a for a in af_agents}
+        for rule in handoff.rules:
+            src_name = config_id_to_name.get(rule.source_agent_id)
+            if not src_name or src_name not in name_to_af:
+                continue
+            src_af = name_to_af[src_name]
+            tgt_af = [
+                name_to_af[config_id_to_name[tid]]
+                for tid in rule.target_agent_ids
+                if config_id_to_name.get(tid) in name_to_af
+            ]
+            if tgt_af:
+                builder.add_handoff(src_af, tgt_af)
+
+    # Set start agent
+    name_to_af = {a.name: a for a in af_agents}
+    start_config = agents_by_id.get(handoff.start_agent_id or "")
+    if start_config and start_config.name in name_to_af:
+        builder.with_start_agent(name_to_af[start_config.name])
+    else:
+        builder.with_start_agent(af_agents[0])
+
+    workflow = builder.build()
+    return _WorkflowState(
+        workflow=workflow,
+        name_to_config=name_to_config,
+        cleanups=all_cleanups,
+    )
+
+
+# -- Main streaming function ---------------------------------------------------
 
 async def stream_handoff_turn(
     handoff: HandoffDefinition,
@@ -242,237 +240,276 @@ async def stream_handoff_turn(
     session: HandoffSession,
     user_message: str,
 ) -> AsyncIterator[str]:
-    """
-    Async generator that yields SSE-formatted strings for one handoff turn.
-
-    After a handoff is triggered, the new agent is automatically invoked in the
-    same SSE stream (no extra round-trip from the user).  A visited-agent set
-    prevents A→B→A infinite loops.
+    """Async generator that yields SSE-formatted strings for one handoff turn.
 
     Events:
     - active_agent  {agent_id, agent_name}
-    - event         {type, title, detail}   — function call / result trace
+    - event         {type, title, detail}   -- function call / result trace
     - delta         {text, agent_id, agent_name}
     - handoff       {from_agent_id, from_agent_name, to_agent_id, to_agent_name}
-    - done          {agent_id, agent_name, text, session_id, current_agent_id, is_complete}
+    - customer_context {...}
+    - done          {agent_id, agent_name, text, session_id, current_agent_id,
+                     is_complete, customer_context}
     - error         {detail}
     """
-    # Record the user turn once for the whole chain
     session.history.append(HandoffChatTurn(role="user", text=user_message))
 
-    visited: set[str] = set()          # agents already responded this turn
-    current_id = session.current_agent_id or handoff.start_agent_id
-    MAX_HOPS = 5                        # safety cap on handoff chain length
-    # If we're already at a specialist agent (not the start agent), treat as post-handoff
-    # so specialist agents never get routing tools on turns where they're already active.
-    handoff_occurred = (current_id != handoff.start_agent_id)
+    # -- Lazy-build workflow state on first turn --------------------------------
+    if session.session_id not in _workflow_states:
+        try:
+            ws = await _build_workflow_state(handoff, agents_by_id)
+            _workflow_states[session.session_id] = ws
+        except ValueError:
+            # Fall back to mock mode using start agent
+            start_config = agents_by_id.get(handoff.start_agent_id or "")
+            if not start_config and handoff.participant_agent_ids:
+                start_config = agents_by_id.get(handoff.participant_agent_ids[0])
+            ws = _WorkflowState(
+                workflow=None,
+                is_mock=True,
+                mock_start_config=start_config,
+            )
+            _workflow_states[session.session_id] = ws
 
-    final_agent: AgentConfig | None = None
-    final_text = ""
+    ws = _workflow_states[session.session_id]
 
-    for _hop in range(MAX_HOPS):
-        current_agent = agents_by_id.get(current_id or "")
-        if not current_agent:
-            yield _sse("error", {"detail": "No active agent found. Configure a start agent and save the handoff."})
+    # -- Mock path (no real LLM credentials) -----------------------------------
+    if ws.is_mock:
+        agent = ws.mock_start_config
+        if not agent:
+            yield _sse("error", {"detail": "No agent configured."})
             return
 
-        if current_agent.id in visited:
-            yield _sse("error", {"detail": f"Handoff loop detected: {current_agent.name} has already responded in this turn."})
-            break
-
-        visited.add(current_agent.id)
-        final_agent = current_agent
-
-        # Emit active_agent as a connection-style event for the thinking trace
-        yield _sse("active_agent", {"agent_id": current_agent.id, "agent_name": current_agent.name})
-        # Also surface it as a trace event matching Agents-tab style
-        yield _sse("event", {"type": "connection", "title": f"{current_agent.name} に接続中… (model: {current_agent.model.provider}/{current_agent.model.model})", "detail": ""})
+        session.current_agent_id = agent.id
+        yield _sse("active_agent", {"agent_id": agent.id, "agent_name": agent.name})
+        yield _sse("event", {
+            "type": "connection",
+            "title": f"{agent.name} に接続中… (model: {agent.model.provider}/{agent.model.model})",
+            "detail": "",
+        })
         await asyncio.sleep(0.03)
 
-        # Build system prompt (base + routing instructions)
-        # After a handoff has occurred, don't give the receiving agent routing tools
-        routing_addon = _build_routing_instructions(handoff, current_agent.id, agents_by_id, visited) if not handoff_occurred else ""
-        effective_instructions = (current_agent.instructions or "") + routing_addon
+        mock_text = _mock_text(agent, user_message, ["Mock provider selected — no LLM credentials."])
+        for i in range(0, len(mock_text), 8):
+            chunk = mock_text[i: i + 8]
+            yield _sse("delta", {"text": chunk, "agent_id": agent.id, "agent_name": agent.name})
+            await asyncio.sleep(0.015)
 
-        client, cleanup, issues = await _resolve_client(current_agent.model)
-        af_session = _get_af_session(session.session_id, current_agent.id)
-        recorder = _HandoffRecorder()
-        full_text = ""
+        session.history.append(HandoffChatTurn(
+            role="agent", agent_id=agent.id, agent_name=agent.name, text=mock_text,
+        ))
+        if handoff.termination_keyword and handoff.termination_keyword.lower() in user_message.lower():
+            session.is_complete = True
+        yield _sse("event", {"type": "response_complete", "title": "応答完了", "detail": ""})
+        yield _sse("done", {
+            "agent_id": agent.id, "agent_name": agent.name, "text": mock_text,
+            "session_id": session.session_id, "current_agent_id": session.current_agent_id,
+            "is_complete": session.is_complete, "customer_context": dict(session.customer_context),
+        })
+        return
 
-        try:
-            if client is None:
-                # ── Mock path ──────────────────────────────────────────
-                mock_response = _mock_text(current_agent, user_message, issues)
-                for i in range(0, len(mock_response), 8):
-                    chunk = mock_response[i : i + 8]
-                    full_text += chunk
-                    yield _sse("delta", {"text": chunk, "agent_id": current_agent.id, "agent_name": current_agent.name})
-                    await asyncio.sleep(0.015)
-            else:
-                # ── Live LLM path ──────────────────────────────────────
-                skills_provider = build_skills_provider(current_agent.skill_ids)
-                context_providers = [skills_provider] if skills_provider else None
-                mcp_tools = _build_mcp_tools(current_agent.mcp_tools, client)
+    # -- Live HandoffBuilder path -----------------------------------------------
 
-                # Build transfer_to_X tools — skip targets already visited
-                # and skip entirely if this agent already received a handoff
-                eligible_rules = [r for r in (handoff.rules or []) if r.source_agent_id == current_agent.id]
-                handoff_tools: list = []
-                if not handoff_occurred:
-                    for rule in eligible_rules:
-                        for tid in (rule.target_agent_ids or []):
-                            if tid not in visited:           # ← loop prevention
-                                tgt = agents_by_id.get(tid)
-                                if tgt:
-                                    handoff_tools.append(recorder.make_tool(tgt))
+    # Determine how to invoke the workflow this turn
+    if ws.pending_request_id:
+        # Resume: respond to the pending request_info from the previous turn
+        is_terminating = (
+            handoff.termination_keyword
+            and handoff.termination_keyword.lower() in user_message.lower()
+        )
+        response_messages = (
+            HandoffAgentUserRequest.terminate()
+            if is_terminating
+            else HandoffAgentUserRequest.create_response(user_message)
+        )
+        wf_stream = ws.workflow.run(
+            responses={ws.pending_request_id: response_messages},
+            stream=True,
+        )
+    else:
+        # First turn: start fresh
+        wf_stream = ws.workflow.run(user_message, stream=True)
 
-                all_tools = mcp_tools + handoff_tools
+    ws.pending_request_id = None  # reset; will be set again if workflow pauses
 
-                runtime_agent = Agent(
-                    client=client,
-                    name=current_agent.name,
-                    description=current_agent.description or None,
-                    instructions=effective_instructions,
-                    tools=all_tools or None,
-                    context_providers=context_providers,
-                )
+    current_executor_id: str | None = None
+    current_agent_text: str = ""
+    final_text: str = ""
+    final_agent_config: AgentConfig | None = None
+    pending_fn_name: str = ""
+    pending_fn_args: str = ""
 
-                stream = runtime_agent.run(user_message, stream=True, session=af_session)
-                pending_fn_name = ""
-                pending_fn_args = ""
-                async for update in stream:
-                    # ── Function call / result trace ───────────────────
-                    for content in (update.contents or []):
-                        ctype = getattr(content, "type", "")
-                        if ctype == "function_call":
-                            fn_name = getattr(content, "name", "") or ""
-                            fn_args = getattr(content, "arguments", "") or ""
-                            if isinstance(fn_args, dict):
-                                fn_args = json.dumps(fn_args, indent=2, ensure_ascii=False)
-                            if fn_name:
-                                if pending_fn_name:
-                                    yield _sse("event", {"type": "function_call.complete", "title": f"Calling function_call({pending_fn_name})", "detail": pending_fn_args})
-                                pending_fn_name = fn_name
-                                pending_fn_args = str(fn_args)
-                            else:
-                                pending_fn_args += str(fn_args)
-                        elif ctype == "function_result":
-                            call_name = pending_fn_name
+    try:
+        async for event in wf_stream:
+            if event.type == "output":
+                update = event.data
+                if not isinstance(update, AgentResponseUpdate):
+                    continue
+
+                exec_id = event.executor_id or ""
+
+                # -- Agent change -----------------------------------------------
+                if exec_id and exec_id != current_executor_id:
+                    if pending_fn_name:
+                        yield _sse("event", {
+                            "type": "function_call.complete",
+                            "title": f"Calling function_call({pending_fn_name})",
+                            "detail": pending_fn_args,
+                        })
+                        pending_fn_name = ""
+                        pending_fn_args = ""
+
+                    current_executor_id = exec_id
+                    current_agent_text = ""
+                    agent_config = ws.name_to_config.get(exec_id)
+                    final_agent_config = agent_config
+                    session.current_agent_id = agent_config.id if agent_config else exec_id
+                    model_info = (
+                        f"{agent_config.model.provider}/{agent_config.model.model}"
+                        if agent_config else ""
+                    )
+                    yield _sse("active_agent", {
+                        "agent_id": session.current_agent_id,
+                        "agent_name": exec_id,
+                    })
+                    yield _sse("event", {
+                        "type": "connection",
+                        "title": f"{exec_id} に接続中… (model: {model_info})",
+                        "detail": "",
+                    })
+                    await asyncio.sleep(0.03)
+
+                # -- Function call / result contents ----------------------------
+                for content in (update.contents or []):
+                    ctype = getattr(content, "type", "")
+                    if ctype == "function_call":
+                        fn_name = getattr(content, "name", "") or ""
+                        fn_args = getattr(content, "arguments", "") or ""
+                        if isinstance(fn_args, dict):
+                            fn_args = json.dumps(fn_args, indent=2, ensure_ascii=False)
+                        if fn_name:
                             if pending_fn_name:
-                                yield _sse("event", {"type": "function_call.complete", "title": f"Calling function_call({pending_fn_name})", "detail": pending_fn_args})
-                                pending_fn_name = ""
-                                pending_fn_args = ""
-                            fn_output = (
-                                getattr(content, "content", None)
-                                or getattr(content, "output", None)
-                                or getattr(content, "result", None)
-                                or ""
-                            )
-                            if isinstance(fn_output, list):
-                                fn_output = json.dumps(fn_output, ensure_ascii=False)
-                            elif not isinstance(fn_output, str):
-                                fn_output = str(fn_output) if fn_output else ""
-                            # ── Auto-capture customer context from skill results ──
-                            if update_context_from_output(fn_output, session.customer_context):
-                                yield _sse("customer_context", dict(session.customer_context))
-                            yield _sse("event", {"type": "function_result.complete", "title": f"Result: {call_name or 'function'}", "detail": fn_output[:300]})
+                                yield _sse("event", {
+                                    "type": "function_call.complete",
+                                    "title": f"Calling function_call({pending_fn_name})",
+                                    "detail": pending_fn_args,
+                                })
+                            pending_fn_name = fn_name
+                            pending_fn_args = str(fn_args)
+                        else:
+                            pending_fn_args += str(fn_args)
 
-                    # ── Text delta ─────────────────────────────────────
-                    chunk = update.text or ""
-                    if chunk:
+                    elif ctype == "function_result":
+                        call_name = pending_fn_name
                         if pending_fn_name:
-                            yield _sse("event", {"type": "function_call.complete", "title": f"Calling function_call({pending_fn_name})", "detail": pending_fn_args})
+                            yield _sse("event", {
+                                "type": "function_call.complete",
+                                "title": f"Calling function_call({pending_fn_name})",
+                                "detail": pending_fn_args,
+                            })
                             pending_fn_name = ""
                             pending_fn_args = ""
-                        full_text += chunk
-                        yield _sse("delta", {"text": chunk, "agent_id": current_agent.id, "agent_name": current_agent.name})
+                        fn_output = (
+                            getattr(content, "content", None)
+                            or getattr(content, "output", None)
+                            or getattr(content, "result", None)
+                            or ""
+                        )
+                        if isinstance(fn_output, list):
+                            fn_output = json.dumps(fn_output, ensure_ascii=False)
+                        elif not isinstance(fn_output, str):
+                            fn_output = str(fn_output) if fn_output else ""
+                        if update_context_from_output(fn_output, session.customer_context):
+                            yield _sse("customer_context", dict(session.customer_context))
+                        yield _sse("event", {
+                            "type": "function_result.complete",
+                            "title": f"Result: {call_name or 'function'}",
+                            "detail": fn_output[:300],
+                        })
 
-                if pending_fn_name:
-                    yield _sse("event", {"type": "function_call.complete", "title": f"Calling function_call({pending_fn_name})", "detail": pending_fn_args})
+                # -- Text delta ------------------------------------------------
+                chunk = update.text or ""
+                if chunk:
+                    if pending_fn_name:
+                        yield _sse("event", {
+                            "type": "function_call.complete",
+                            "title": f"Calling function_call({pending_fn_name})",
+                            "detail": pending_fn_args,
+                        })
+                        pending_fn_name = ""
+                        pending_fn_args = ""
+                    current_agent_text += chunk
+                    final_text = current_agent_text
+                    yield _sse("delta", {
+                        "text": chunk,
+                        "agent_id": session.current_agent_id or "",
+                        "agent_name": exec_id,
+                    })
 
-                try:
-                    final = await stream.get_final_response()
-                    if final.text and len(final.text) > len(full_text):
-                        extra = final.text[len(full_text):]
-                        full_text = final.text
-                        yield _sse("delta", {"text": extra, "agent_id": current_agent.id, "agent_name": current_agent.name})
-                except Exception:
-                    pass
+            elif event.type == "handoff_sent":
+                sent: HandoffSentEvent = event.data
+                from_cfg = ws.name_to_config.get(sent.source)
+                to_cfg = ws.name_to_config.get(sent.target)
+                yield _sse("handoff", {
+                    "from_agent_id": from_cfg.id if from_cfg else sent.source,
+                    "from_agent_name": sent.source,
+                    "to_agent_id": to_cfg.id if to_cfg else sent.target,
+                    "to_agent_name": sent.target,
+                })
+                yield _sse("event", {
+                    "type": "handoff_transition",
+                    "title": f"Handoff: {sent.source} -> {sent.target}",
+                    "detail": "",
+                })
 
-        except Exception as exc:
-            err_text = f"\n[Error: {exc}]"
-            full_text += err_text
-            yield _sse("delta", {"text": err_text, "agent_id": current_agent.id, "agent_name": current_agent.name})
-        finally:
-            await asyncio.gather(*(_close_resource(r) for r in cleanup), return_exceptions=True)
+            elif event.type == "request_info":
+                # Workflow paused -- save request_id for the next user turn
+                ws.pending_request_id = event._request_id  # type: ignore[attr-defined]
 
-        final_text = full_text
+            elif event.type == "failed":
+                err_msg = (
+                    event.details.message  # type: ignore[union-attr]
+                    if event.details else "Unknown workflow error"
+                )
+                yield _sse("event", {"type": "error", "title": "Error", "detail": err_msg})
 
-        # ── Validate handoff target ────────────────────────────────────
-        handoff_target_id = recorder.target_agent_id
-        handoff_target = agents_by_id.get(handoff_target_id or "") if handoff_target_id else None
-        if handoff_target:
-            eligible_rules = [r for r in (handoff.rules or []) if r.source_agent_id == current_agent.id]
-            authorised_targets = {tid for r in eligible_rules for tid in (r.target_agent_ids or [])}
-            if handoff_target.id not in authorised_targets or handoff_target.id in visited:
-                handoff_target = None  # unauthorised or would cause loop
+        # Flush any dangling function call trace
+        if pending_fn_name:
+            yield _sse("event", {
+                "type": "function_call.complete",
+                "title": f"Calling function_call({pending_fn_name})",
+                "detail": pending_fn_args,
+            })
 
-        # ── Record this agent's turn ───────────────────────────────────
+    except Exception as exc:
+        err_text = f"\n[Error: {exc}]"
+        final_text += err_text
+        yield _sse("delta", {
+            "text": err_text,
+            "agent_id": session.current_agent_id or "",
+            "agent_name": current_executor_id or "",
+        })
+
+    # -- Record agent turn ------------------------------------------------------
+    if final_text:
         session.history.append(HandoffChatTurn(
             role="agent",
-            agent_id=current_agent.id,
-            agent_name=current_agent.name,
-            text=full_text,
+            agent_id=session.current_agent_id,
+            agent_name=current_executor_id,
+            text=final_text,
         ))
 
-        if handoff_target:
-            # Build effective reason: session.customer_context is authoritative (LLM may hallucinate "未確認")
-            if session.customer_context:
-                ctx = session.customer_context
-                parts = []
-                if "customer_id" in ctx:
-                    parts.append(f"customer_id: {ctx['customer_id']}")
-                if "full_name" in ctx:
-                    parts.append(f"氏名: {ctx['full_name']}")
-                if "contract_id" in ctx:
-                    parts.append(f"契約ID: {ctx['contract_id']}")
-                    if "product_name" in ctx:
-                        parts.append(f"商品名: {ctx['product_name']}")
-                parts.append(f"用件: {user_message}")
-                effective_reason = "\n".join(parts)
-            else:
-                effective_reason = recorder.handoff_reason
-
-            # Emit handoff SSE and continue the loop with the new agent
-            yield _sse("handoff", {
-                "from_agent_id": current_agent.id,
-                "from_agent_name": current_agent.name,
-                "to_agent_id": handoff_target.id,
-                "to_agent_name": handoff_target.name,
-            })
-            yield _sse("event", {"type": "handoff_transition", "title": f"Handoff: {current_agent.name} \u2192 {handoff_target.name}", "detail": ""})
-            current_id = handoff_target.id
-            session.current_agent_id = handoff_target.id
-            handoff_occurred = True
-            # Reset the receiving agent's AFSession to avoid stale tool call history
-            _af_sessions.setdefault(session.session_id, {})[handoff_target.id] = AFSession()
-            # Prepend context for the receiving agent
-            if effective_reason:
-                user_message = f"[引き継ぎ情報]\n{effective_reason}\n\n[顧客メッセージ]\n{user_message}"
-        else:
-            # No handoff — this agent gave the final answer
-            yield _sse("event", {"type": "response_complete", "title": "応答完了", "detail": ""})
-            session.current_agent_id = current_agent.id
-            break
-
-    # ── Termination check ────────────────────────────────────────────────────
-    if handoff.termination_keyword and handoff.termination_keyword.lower() in user_message.lower():
+    # -- Completion check -------------------------------------------------------
+    if ws.pending_request_id is None:
+        # Workflow ended without requesting more input -> conversation complete
+        session.is_complete = True
+    elif handoff.termination_keyword and handoff.termination_keyword.lower() in user_message.lower():
         session.is_complete = True
 
-    # ── Emit single done event ───────────────────────────────────────────────
+    yield _sse("event", {"type": "response_complete", "title": "応答完了", "detail": ""})
     yield _sse("done", {
-        "agent_id": final_agent.id if final_agent else "",
-        "agent_name": final_agent.name if final_agent else "",
+        "agent_id": final_agent_config.id if final_agent_config else (session.current_agent_id or ""),
+        "agent_name": current_executor_id or "",
         "text": final_text,
         "session_id": session.session_id,
         "current_agent_id": session.current_agent_id,

@@ -314,6 +314,20 @@ async def get_customer(customer_id: str) -> dict[str, object]:
     return profile
 
 
+@app.post("/api/demo/reset")
+async def demo_reset() -> dict[str, str]:
+    """Reset demo CSV data (contracts, activities) to initial snapshots."""
+    import shutil
+    data_dir = BASE_DIR / "demo_app" / "data"
+    initial_dir = data_dir / "_initial"
+    for name in ("contracts.csv", "activities.csv"):
+        src = initial_dir / name
+        dst = data_dir / name
+        if src.exists():
+            shutil.copy2(src, dst)
+    return {"status": "ok"}
+
+
 @app.get("/api/agents/{agent_id}/skill-preview")
 async def agent_skill_preview(agent_id: str) -> dict[str, object]:
     """Return the agent's base instructions plus simulated SkillsProvider advertise block.

@@ -1923,8 +1923,10 @@ const sv = {
   toolExecEvents:   [],     // Tool Execution column entries
   sessionMessages:  [],     // Sessions column: reconstructed _cache per agent
   _callQueue:       [],     // FIFO queue of function call names for result pairing
+  _pendingScriptSkill: null, // skill_name of last run_skill_script call (for auto-refresh)
   customerContext:  {},     // Shared customer context captured from skill results
   _customerFetched: false,  // True once full profile has been fetched for current customer_id
+  _prevCustomerCtx: null,   // Snapshot of previous context for diff-based flash
 };
 
 /* ── Handoff selector ────────────────────────────────────── */
@@ -2118,6 +2120,9 @@ function handleSvSSE(type, data, msgIdx) {
         const ts = new Date().toLocaleTimeString();
         sv.sessionMessages.push({ type: "skill_call", funcName: fnName, skillName: skillName || fnName, args: data.detail || "", ts });
         renderSvSessionMessages();
+      } else if (fnName === "run_skill_script") {
+        try { sv._pendingScriptSkill = JSON.parse(data.detail || "{}").skill_name || null; }
+        catch { sv._pendingScriptSkill = null; }
       }
     } else if (evType === "function_result.complete") {
       const calledName = sv._callQueue.shift() || "";
@@ -2125,6 +2130,17 @@ function handleSvSSE(type, data, msgIdx) {
         const ts = new Date().toLocaleTimeString();
         sv.sessionMessages.push({ type: "skill_result", funcName: "load_skill", content: (data.detail || "").slice(0, 400), ts });
         renderSvSessionMessages();
+      } else if (calledName === "run_skill_script") {
+        const scriptSkill = sv._pendingScriptSkill;
+        sv._pendingScriptSkill = null;
+        const READONLY_SKILLS = new Set([
+          "customer_lookup", "customer_profile_summary", "identity_verification",
+          "auto_insurance_quote", "auto_insurance_recommendation",
+          "life_insurance_quote", "life_insurance_recommendation",
+        ]);
+        if (scriptSkill && !READONLY_SKILLS.has(scriptSkill) && sv.customerContext.customer_id) {
+          fetchAndPopulateCustomer(sv.customerContext.customer_id, { force: true });
+        }
       }
     }
 
@@ -2190,7 +2206,10 @@ function handleSvSSE(type, data, msgIdx) {
     if (data.current_agent_id) { sv.activeAgentId = data.current_agent_id; updateSvActiveAgent(data.current_agent_id); }
     if (data.customer_context && Object.keys(data.customer_context).length) {
       const prevId = sv.customerContext.customer_id;
-      sv.customerContext = { ...sv.customerContext, ...data.customer_context };
+      // Exclude contracts/activities: those come from fresh CSV fetch and must not be
+      // overwritten by the server-side session context which may be stale.
+      const { contracts: _c, activities: _a, ...scalarCtx } = data.customer_context;
+      sv.customerContext = { ...sv.customerContext, ...scalarCtx };
       renderSvCustomerInfo();
       const newId = sv.customerContext.customer_id;
       if (newId && newId !== prevId) fetchAndPopulateCustomer(newId);
@@ -2200,7 +2219,9 @@ function handleSvSSE(type, data, msgIdx) {
 
   } else if (type === "customer_context") {
     const prevId = sv.customerContext.customer_id;
-    sv.customerContext = { ...sv.customerContext, ...data };
+    // Exclude contracts/activities: those come from fresh CSV fetch.
+    const { contracts: _c, activities: _a, ...scalarCtx } = data;
+    sv.customerContext = { ...sv.customerContext, ...scalarCtx };
     renderSvCustomerInfo();
     const newId = sv.customerContext.customer_id;
     if (newId && newId !== prevId) fetchAndPopulateCustomer(newId);
@@ -2275,10 +2296,6 @@ async function fetchAndPopulateCustomer(customerId, { force = false } = {}) {
   // Skip if we already fetched a full profile for this ID (unless forced)
   if (!force && sv._customerFetched && sv.customerContext.customer_id === customerId) return;
 
-  // Show loading state on reload button
-  const btn = $("#sv-customer-reload-btn");
-  if (btn) { btn.disabled = true; btn.classList.add("loading"); }
-
   try {
     const res = await fetch(`/api/customers/${encodeURIComponent(customerId)}`);
     if (!res.ok) return;
@@ -2297,8 +2314,6 @@ async function fetchAndPopulateCustomer(customerId, { force = false } = {}) {
     renderSvCustomerInfo();
   } catch (_) {
     // silently ignore network errors
-  } finally {
-    if (btn) { btn.disabled = false; btn.classList.remove("loading"); }
   }
 }
 
@@ -2306,10 +2321,6 @@ function renderSvCustomerInfo() {
   const el = $("#sv-customer-info");
   if (!el) return;
   const ctx = sv.customerContext || {};
-
-  // Enable/disable reload button based on whether we have a customer_id
-  const reloadBtn = $("#sv-customer-reload-btn");
-  if (reloadBtn) reloadBtn.disabled = !ctx.customer_id;
 
   function fval(key) {
     const v = ctx[key];
@@ -2337,7 +2348,7 @@ function renderSvCustomerInfo() {
     ? contracts.map((c) => {
         const isActive = c.contract_status === "有効";
         const premium  = c.monthly_premium ? `¥${Number(c.monthly_premium).toLocaleString()}` : "—";
-        return `<tr class="sv-crm-tr-anim">
+        return `<tr>
           <td>${esc(c.contract_id    || "—")}</td>
           <td>${esc(c.product_name   || "—")}</td>
           <td class="sv-crm-td-num">${premium}</td>
@@ -2349,7 +2360,7 @@ function renderSvCustomerInfo() {
   // ── Activity rows ──
   const activityRows = activities.length
     ? activities.map((a) => `
-        <div class="sv-crm-activity sv-crm-tr-anim">
+        <div class="sv-crm-activity">
           <div class="sv-crm-activity-meta">
             <span class="sv-crm-activity-date">${esc(a.activity_date || "")}</span>
             <span class="sv-crm-activity-type">${esc(a.activity_type || "")}</span>
@@ -2367,7 +2378,7 @@ function renderSvCustomerInfo() {
       <div class="sv-crm-section-head">顧客プロフィール</div>
       <div class="sv-crm-fields">
         ${PROFILE.map(([label, key]) => `
-          <div class="sv-crm-row${ctx[key] ? " sv-crm-row-filled" : ""}">
+          <div class="sv-crm-row">
             <span class="sv-crm-label">${label}</span>
             <span class="sv-crm-value">${fval(key)}</span>
           </div>`).join("")}
@@ -2385,6 +2396,7 @@ function renderSvCustomerInfo() {
       <div class="sv-crm-activities">${activityRows}</div>
     </div>
   </div>`;
+
 }
 
 /* ── Session message renderer ────────────────────────────── */
@@ -2574,6 +2586,31 @@ function clearSvTimeline() {
   sv.customerContext = {};
   sv._customerFetched = false;
   renderSvCustomerInfo();
+}
+
+/* ── Copy session log as JSON ────────────────────────────── */
+function copySvSessionLog() {
+  const log = {
+    session_id:           sv.sessionId,
+    handoff_id:           sv.handoffId,
+    active_agent_id:      sv.activeAgentId,
+    customer_context:     sv.customerContext,
+    chat_messages:        sv.chatMessages,
+    timeline_events:      sv.timelineEvents,
+    session_messages:     sv.sessionMessages,
+    tool_exec_events:     sv.toolExecEvents,
+    loaded_skill_ids:     sv.loadedSkillIds,
+    system_prompt_layers: sv.systemPromptLayers,
+    copied_at:            new Date().toISOString(),
+  };
+  navigator.clipboard.writeText(JSON.stringify(log, null, 2)).then(() => {
+    const btn = $("#sv-chat-copy-btn");
+    if (!btn) return;
+    const orig = btn.innerHTML;
+    btn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>';
+    btn.title = "Copied!";
+    setTimeout(() => { btn.innerHTML = orig; btn.title = "セッションログをJSONでコピー"; }, 2000);
+  }).catch((e) => { console.error("Copy failed:", e); });
 }
 
 /* ── Active agent badge ──────────────────────────────────── */
@@ -2934,6 +2971,7 @@ function initSkillViz() {
   $("#sv-handoff-select")?.addEventListener("change", loadHandoffForViz);
 
   // Chat
+  $("#sv-chat-copy-btn")?.addEventListener("click", copySvSessionLog);
   $("#sv-chat-send-btn")?.addEventListener("click", sendSvMessage);
   $("#sv-chat-input")?.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendSvMessage(); } });
 
@@ -2954,10 +2992,18 @@ function initSkillViz() {
   // Clear timeline
   $("#sv-clear-timeline-btn")?.addEventListener("click", clearSvTimeline);
 
-  // Customer Information reload button
-  $("#sv-customer-reload-btn")?.addEventListener("click", () => {
-    const cid = sv.customerContext?.customer_id;
-    if (cid) fetchAndPopulateCustomer(cid, { force: true });
+  // Demo reset button — restore contracts.csv + activities.csv from _initial/ and clear panel
+  $("#sv-demo-reset-btn")?.addEventListener("click", async () => {
+    const btn = $("#sv-demo-reset-btn");
+    if (btn) { btn.disabled = true; btn.classList.add("loading"); }
+    try {
+      await fetch("/api/demo/reset", { method: "POST" });
+      sv.customerContext = {};
+      sv._customerFetched = false;
+      renderSvCustomerInfo();
+    } finally {
+      if (btn) { btn.disabled = false; btn.classList.remove("loading"); }
+    }
   });
 
   // Panel maximize/restore

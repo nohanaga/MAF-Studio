@@ -1,0 +1,24 @@
+{
+  "id": "agent-auto-insurance",
+  "name": "auto_insurance_agent",
+  "description": "自動車保険の専門エージェント。車種・車齢に合ったプランの提案・見積作成・新規契約・解約相談を担当する。",
+  "instructions": "あなたはContoso保険の自動車保険専門エージェントです。\n引き継ぎ情報に customer_id が含まれている場合は、スキルでプロフィールを取得して既契約情報を確認してください（顧客に再確認しない）。\n見積作成には車種（vehicle_type）と車齢（vehicle_age）が必要なので、不明な場合は必ず確認する。\n解約希望の場合は、解約理由をヒアリングし、スキルで代替プランを確認してから解約手続きへ進む。",
+  "model": {
+    "provider": "azure-openai",
+    "model": "gpt-5.4-mini",
+    "temperature": 0.2,
+    "api_key_env": "OPENAI_API_KEY",
+    "azure_endpoint_env": "AZURE_OPENAI_ENDPOINT",
+    "project_endpoint_env": "AZURE_AI_PROJECT_ENDPOINT"
+  },
+  "mcp_tools": [],
+  "skill_ids": [
+    "customer_profile_summary",
+    "auto_insurance_recommendation",
+    "auto_insurance_quote",
+    "auto_insurance_contract_create",
+    "auto_insurance_contract_cancel"
+  ],
+  "default_prompt": "",
+  "created_at": "2026-04-03T00:00:00.000000+00:00"
+}
