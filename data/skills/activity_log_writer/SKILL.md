@@ -17,7 +17,11 @@ description: 顧客対応の活動記録を activities.csv に書き込む。
 
 ## 業務上の暗黙知
 - activity_typeは「電話」「訪問」「チャット」「システム」から選択
-- agent_nameは対応エージェント名（例: FrontAgent, AutoInsuranceAgent）
+- **agent_nameは、このスキルを呼び出しているエージェント自身の名前を使う**
+  - 生命保険エージェントが呼び出す場合: `"LifeInsuranceAgent"`
+  - 自動車保険エージェントが呼び出す場合: `"AutoInsuranceAgent"`
+  - フロントエージェントが呼び出す場合: `"FrontAgent"`
+  - FrontAgentが商談を起票することは原則なく、専門エージェントが記録する
 - contentには会話の要点と結論を簡潔に記入する
 
 ## 使用するスクリプト
