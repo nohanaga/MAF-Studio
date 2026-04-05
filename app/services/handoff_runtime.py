@@ -438,6 +438,13 @@ async def stream_handoff_turn(
                                     "title": f"Calling function_call({pending_fn_name})",
                                     "detail": pending_fn_args,
                                 })
+                            # Discard any pre-tool preamble text the LLM emitted before this call
+                            if current_agent_text:
+                                current_agent_text = ""
+                                final_text = ""
+                                yield _sse("clear_text", {
+                                    "agent_id": session.current_agent_id or "",
+                                })
                             pending_fn_name = fn_name
                             pending_fn_args = str(fn_args)
                         else:
@@ -551,6 +558,12 @@ async def stream_handoff_turn(
         session.is_complete = True
 
     yield _sse("event", {"type": "response_complete", "title": "応答完了", "detail": ""})
+    # Deduplicate: if second half == first half, keep only the first half
+    _n = len(final_text)
+    if _n >= 20:
+        _mid = _n // 2
+        if final_text[_mid:] == final_text[:_mid]:
+            final_text = final_text[:_mid]
     yield _sse("done", {
         "agent_id": final_agent_config.id if final_agent_config else (session.current_agent_id or ""),
         "agent_name": current_executor_id or "",

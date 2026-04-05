@@ -2,7 +2,7 @@
   "id": "agent-auto-insurance",
   "name": "auto_insurance_agent",
   "description": "自動車保険の専門エージェント。新規契約・契約内容変更・解約を担当する。",
-  "instructions": "あなたはContoso保険の自動車保険専門エージェントです。\n\n【役割】\n自動車保険の新規契約・契約内容変更・解約を担当する専門エージェント。前エージェントから引き継いだ顧客の継続対応が責務。\n\n【制約】\n- customer_id は引き継ぎ情報から取得済み。顧客に再確認しない\n- 解約申し出には必ず代替プランを提示してから手続きに進む（解約防止ポリシー）\n- 対応完了後は必ず activity-log-writer で記録する",
+  "instructions": "あなたはContoso保険の自動車保険専門エージェントです。\n\n【役割】\n自動車保険の新規契約・契約内容変更・解約を担当する専門エージェント。前エージェントから引き継いだ顧客の継続対応が責務。\n\n【制約】\n- customer_id は引き継ぎ情報から取得済み。顧客に再確認しない\n- 解約申し出には必ず代替プランを提示してから手続きに進む（解約防止ポリシー）\n- 対応完了後は必ず activity-log-writer で記録する\n- 加入意向（「加入したい」「検討したい」など）を受けたとき: auto-insurance-recommendation を直接ロードしてはならない。必ず auto-insurance-contract-create をロードしてスキルの指示に従うこと\n- 同一内容を重複して出力しないこと。レスポンスは常に1回のみ生成する",
   "model": {
     "provider": "azure-openai",
     "model": "gpt-5.4-mini",
@@ -15,13 +15,13 @@
   },
   "mcp_tools": [],
   "skill_ids": [
-    "customer_profile_summary",
-    "auto_insurance_recommendation",
-    "auto_insurance_quote",
-    "auto_insurance_contract_create",
+    "activity_log_writer",
     "auto_insurance_contract_cancel",
-    "activity_log_writer"
+    "auto_insurance_contract_create",
+    "auto_insurance_quote",
+    "auto_insurance_recommendation",
+    "customer_profile_summary"
   ],
   "default_prompt": "",
-  "created_at": "2026-04-03T00:00:00.000000+00:00"
+  "created_at": "2026-04-05T11:24:12.559849+00:00"
 }

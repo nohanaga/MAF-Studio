@@ -43,11 +43,20 @@ def get_customer_profile(customer_id: str) -> dict | None:
     all_contracts = [
         {
             "contract_id": c["contract_id"],
+            "product_id": c.get("product_id", ""),
             "product_name": product_map.get(c["product_id"], c.get("product_id", "")),
-            "monthly_premium": c.get("monthly_premium", ""),
-            "contract_status": c.get("contract_status", ""),
+            "contract_date": c.get("contract_date", ""),
             "start_date": c.get("start_date", ""),
+            "end_date": c.get("end_date", ""),
+            "contract_status": c.get("contract_status", ""),
+            "monthly_premium": c.get("monthly_premium", ""),
+            "coverage_amount": c.get("coverage_amount", ""),
+            "payment_method": c.get("payment_method", ""),
+            "insured_name": c.get("insured_name", ""),
+            "beneficiary_name": c.get("beneficiary_name", ""),
+            "beneficiary_relation": c.get("beneficiary_relation", ""),
             "next_review_date": c.get("next_review_date", ""),
+            "notes": c.get("notes", ""),
         }
         for c in contracts
         if c.get("customer_id", "").strip() == customer_id

@@ -2861,6 +2861,7 @@ function showCrmDetailModal(type, data) {
   title.textContent = type === "contract" ? "契約詳細" : "商談詳細";
 
   body.innerHTML = fields.map(([label, key]) => {
+    if (key === "coverage_amount" && String(data.product_name || "").includes("自動車")) return "";
     let val = data[key];
     if (val === undefined || val === null || val === "") val = null;
     if (key === "monthly_premium" && val) val = `¥${Number(val).toLocaleString()}`;
