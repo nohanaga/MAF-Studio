@@ -124,15 +124,13 @@ function buildMcpRow(tool = {}) {
    POPULATE UI
    ============================================================== */
 function populateAgentList() {
-  const c = $("#agent-list");
-  c.innerHTML = "";
-  studio.state.agents.forEach((agent) => {
-    const card = document.createElement("div");
-    card.className = `agent-card${agent.id === studio.selectedAgentId ? " selected" : ""}`;
-    card.innerHTML = `<strong>${esc(agent.name)}</strong><div class="meta">${esc(agent.model.provider)} · ${esc(agent.model.model)}</div>`;
-    card.addEventListener("click", () => loadAgent(agent));
-    c.appendChild(card);
-  });
+  const sel = $("#agent-select");
+  if (!sel) return;
+  const currentId = studio.selectedAgentId;
+  sel.innerHTML = '<option value="">— Select Agent —</option>' +
+    studio.state.agents.map((a) =>
+      `<option value="${esc(a.id)}"${a.id === currentId ? " selected" : ""}>${esc(a.name)}</option>`
+    ).join("");
 }
 
 function populateSkillList() {
@@ -3376,12 +3374,29 @@ function initSkillViz() {
   }
 }
 
+/* ── Theme toggle ───────────────────────────────────────── */
+(function initTheme() {
+  if (localStorage.getItem("theme") === "light") document.body.classList.add("light");
+})();
 
 function bindEvents() {
+  // Theme toggle
+  $("#theme-toggle-btn")?.addEventListener("click", () => {
+    const isLight = document.body.classList.toggle("light");
+    localStorage.setItem("theme", isLight ? "light" : "dark");
+  });
+
   $("#new-agent-btn").addEventListener("click", newAgent);
   $("#add-mcp-btn").addEventListener("click", () => $("#mcp-container").appendChild(buildMcpRow()));
   $("#save-agent-btn").addEventListener("click", saveAgent);
   $("#delete-agent-btn").addEventListener("click", deleteAgent);
+  // Agent dropdown selector
+  $("#agent-select")?.addEventListener("change", () => {
+    const id = $("#agent-select").value;
+    if (!id) { newAgent(); return; }
+    const a = (studio.state?.agents || []).find(x => x.id === id);
+    if (a) loadAgent(a);
+  });
   // Chat send
   $("#chat-send-btn").addEventListener("click", testAgent);
   $("#chat-input").addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); testAgent(); } });
