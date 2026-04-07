@@ -424,6 +424,7 @@ async def stream_handoff_turn(
                     await asyncio.sleep(0.03)
 
                 # -- Function call / result contents ----------------------------
+                fn_call_in_this_update = False
                 for content in (update.contents or []):
                     ctype = getattr(content, "type", "")
                     if ctype == "function_call":
@@ -432,6 +433,7 @@ async def stream_handoff_turn(
                         if isinstance(fn_args, dict):
                             fn_args = json.dumps(fn_args, indent=2, ensure_ascii=False)
                         if fn_name:
+                            fn_call_in_this_update = True
                             if pending_fn_name:
                                 yield _sse("event", {
                                     "type": "function_call.complete",
@@ -472,15 +474,17 @@ async def stream_handoff_turn(
                             fn_output = str(fn_output) if fn_output else ""
                         if update_context_from_output(fn_output, session.customer_context):
                             yield _sse("customer_context", dict(session.customer_context))
+                        # load_skill returns full SKILL.md — send untruncated so the UI can display it
+                        detail_limit = None if call_name == "load_skill" else 300
                         yield _sse("event", {
                             "type": "function_result.complete",
                             "title": f"Result: {call_name or 'function'}",
-                            "detail": fn_output[:300],
+                            "detail": fn_output if detail_limit is None else fn_output[:detail_limit],
                         })
 
                 # -- Text delta ------------------------------------------------
                 chunk = update.text or ""
-                if chunk:
+                if chunk and not fn_call_in_this_update:
                     if pending_fn_name:
                         yield _sse("event", {
                             "type": "function_call.complete",
@@ -558,12 +562,17 @@ async def stream_handoff_turn(
         session.is_complete = True
 
     yield _sse("event", {"type": "response_complete", "title": "応答完了", "detail": ""})
-    # Deduplicate: if second half == first half, keep only the first half
+    # Deduplicate: detect "A + optional_whitespace + A" doubled text pattern
     _n = len(final_text)
     if _n >= 20:
-        _mid = _n // 2
-        if final_text[_mid:] == final_text[:_mid]:
-            final_text = final_text[:_mid]
+        for _off in range(-4, 5):
+            _m = _n // 2 + _off
+            if 1 <= _m <= _n - 1:
+                _a = final_text[:_m].rstrip('\n ')
+                _b = final_text[_m:].lstrip('\n ')
+                if _a and _b and _a == _b:
+                    final_text = _a
+                    break
     yield _sse("done", {
         "agent_id": final_agent_config.id if final_agent_config else (session.current_agent_id or ""),
         "agent_name": current_executor_id or "",

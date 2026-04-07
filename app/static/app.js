@@ -2292,6 +2292,7 @@ function handleHandoffSSE(type, data, msgIdx) {
     // Update last segment text with the server-finalised version
     if (data.text && msg.segments.length) {
       msg.segments[msg.segments.length - 1].text = data.text;
+      msg.text = data.text; // also fix msg.text which may have accumulated duplicates via delta
     }
     msg.agentName = data.agent_name || msg.agentName;
     if (data.current_agent_id) studio.handoffCurrentAgentId = data.current_agent_id;
@@ -2536,7 +2537,7 @@ function handleSvSSE(type, data, msgIdx) {
       const calledName = sv._callQueue.shift() || "";
       if (calledName === "load_skill") {
         const ts = new Date().toLocaleTimeString();
-        sv.sessionMessages.push({ type: "skill_result", funcName: "load_skill", content: (data.detail || "").slice(0, 400), ts });
+        sv.sessionMessages.push({ type: "skill_result", funcName: "load_skill", content: data.detail || "", ts });
         renderSvSessionMessages();
       } else if (calledName === "run_skill_script") {
         const scriptSkill = sv._pendingScriptSkill;

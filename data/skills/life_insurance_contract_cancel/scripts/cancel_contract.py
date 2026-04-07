@@ -30,7 +30,17 @@ def cancel_contract(customer_id: str, contract_id: str, reason: str = "顧客申
         return {"status": "error", "message": f"契約 {contract_id} が見つかりません"}
 
     if target["customer_id"] != customer_id:
-        return {"status": "error", "message": "この契約は指定した顧客に属していません"}
+        # Return valid life insurance contract IDs for this customer so the LLM can retry
+        valid_ids = [
+            c["contract_id"] for c in contracts
+            if c["customer_id"] == customer_id and c["contract_status"] == "有効"
+        ]
+        return {
+            "status": "error",
+            "message": f"契約 {contract_id} は顧客 {customer_id} に属していません。"
+                       f"有効な契約ID: {valid_ids if valid_ids else '（なし）'}。"
+                       "正しい contract_id で再実行してください。",
+        }
 
     if target["contract_status"] != "有効":
         return {"status": "error", "message": f"契約 {contract_id} はすでに解約済みまたは無効です"}

@@ -1,32 +1,35 @@
 # MAF Workflow Studio
 
-DevUI を参考にした **Microsoft Agent Framework 向けのローカル Web スタジオ**です。以下を 1 つの UI で行えます。
+**Microsoft Agent Framework 向けのローカル Web スタジオ**です。エージェントの設計からマルチエージェント実行・スキル動作の可視化まで、1 つの UI で完結します。
 
-- エージェントの作成: `model` / `instructions` / `MCP` / `Agent Skills`
-- Agent Skills の取込: **フォルダ upload** または **ファイル upload**
-- ファイルベース Skill の Python スクリプトを **ローカル subprocess** で実行
-- ワークフローの構築とテスト
-- Edge 種別: `direct`, `conditional`, `switch-case`, `multi-selection`, `fan-in`
-- Agent Framework の `WorkflowBuilder` コードプレビュー表示
+### 主な機能
+
+| タブ | 概要 |
+|---|---|
+| **Agents** | model / instructions / Hosted MCP tools / Agent Skills を設定・保存 |
+| **Skills** | SKILL.md ベースのスキルをアップロードし、スクリプトをローカルで直接実行 |
+| **Handoffs** | 参加 agent・ハンドオフルールを定義し、エージェントメッシュをグラフで確認・チャットでテスト |
+| **Skill Visualization** | Handoff 実行中の skills の advertise / load / execute をリアルタイムで可視化 |
 
 ---
 
 ## 1. セットアップ
 
 ```powershell
-cd c:\Users\ymatayoshi\dev\20260331_maf_webui
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+cd <repo_dir>
+python -m venv .venv
+.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
-必要なら `.env.example` を `.env` にコピーして値を設定します。
+`.env.example` を `.env` にコピーして、使用するプロバイダーの値を設定します。
 
 ---
 
 ## 2. 起動
 
 ```powershell
-cd c:\Users\ymatayoshi\dev\20260331_maf_webui
-.\.venv\Scripts\python.exe -m uvicorn app.main:app --reload
+cd <repo_dir>
+.venv\Scripts\python.exe -m uvicorn app.main:app --reload
 ```
 
 ブラウザーで `http://127.0.0.1:8000` を開きます。
@@ -35,54 +38,51 @@ cd c:\Users\ymatayoshi\dev\20260331_maf_webui
 
 ## 3. モデル接続
 
-### Mock preview
-何も設定しなくても UI と workflow テストは動きます。
+モデルを設定しなくてもモック実行で UI のテストが可能です。
 
-### OpenAI Responses
-- `OPENAI_API_KEY`
-
-### Azure OpenAI
-- `AZURE_OPENAI_API_KEY`
-- `AZURE_OPENAI_ENDPOINT`
-- 任意で `AZURE_OPENAI_API_VERSION`
-
-### Azure AI Foundry
-- `AZURE_AI_PROJECT_ENDPOINT`
-- Azure 認証 (`az login` または `DefaultAzureCredential` が使える状態)
+| プロバイダー | 必要な環境変数 |
+|---|---|
+| OpenAI Responses | `OPENAI_API_KEY` |
+| Azure OpenAI | `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_ENDPOINT` |
+| Azure AI Foundry | `AZURE_AI_PROJECT_ENDPOINT` + `az login` または `DefaultAzureCredential` |
 
 ---
 
-## 4. Skill の取り込み
+## 4. Agent Skills の取り込み
 
-- **フォルダ upload**: `SKILL.md`, `references/`, `scripts/` を含む skill フォルダをそのまま取り込み
-- **ファイル upload**: 単体ファイル群をまとめて skill として登録
-- スクリプト実行: 右ペインの **Run selected skill script** から JSON 引数付きでローカル subprocess 実行
+Skills タブでスキルをアップロードして管理します。
+
+- **フォルダ upload**: `SKILL.md` / `references/` / `scripts/` を含むスキルフォルダをそのまま登録
+- **ファイル upload**: ファイル群をまとめて 1 つのスキルとして登録
+- **スクリプト実行**: 右ペインの **Run selected skill script** から JSON 引数付きでローカル実行し、結果を確認
 
 サンプルとして `data/skills/unit-converter` を同梱しています。
 
 ---
 
-## 5. Workflow Builder
+## 5. Handoff Orchestration
 
-1. 保存済み Agent をノードとして追加
-2. Edge を選択して routing を定義
-3. `Save workflow` または `Test workflow`
-4. 下部に実行トレースと `WorkflowBuilder` コードプレビューを表示
+`HandoffBuilder` を使ったマルチエージェント会話セッションを設計・実行します。
 
-条件 DSL の例:
+1. **Handoffs** タブで開始 agent・参加 agent・ハンドオフルールを定義して保存
+2. エージェントのルーティングをグラフで確認
+3. チャット UI から会話を開始し、エージェント間のハンドオフと各 agent の応答をリアルタイムで確認
 
-- `contains:approve`
-- `not_contains:spam`
-- `regex:approve|ship`
-- `default`
+各 agent には Agent Skills と Hosted MCP tools を割り当て可能。agent 間で共有されるコンテキスト（`customer_context` など）はセッションを通じて保持されます。
 
 ---
 
-## 6. 参考
+## 6. Skill Visualization
 
-- DevUI: <https://github.com/microsoft/agent-framework/tree/main/python/packages/devui>
-- File-based skills: <https://github.com/microsoft/agent-framework/tree/main/python/samples/02-agents/skills/file_based_skill>
-- Subprocess runner: <https://github.com/microsoft/agent-framework/blob/main/python/samples/02-agents/skills/subprocess_script_runner.py>
-- Agent skills docs: <https://learn.microsoft.com/ja-jp/agent-framework/agents/skills?pivots=programming-language-python>
-- Hosted MCP tools docs: <https://learn.microsoft.com/ja-jp/agent-framework/agents/tools/hosted-mcp-tools?pivots=programming-language-python>
-- Workflow edges docs: <https://learn.microsoft.com/ja-jp/agent-framework/workflows/edges?pivots=programming-language-python>
+Handoff 実行中の Agent Skills の動きをリアルタイムで可視化するダッシュボードです。
+
+- **Advertise**: 各 agent がターン開始時にどのスキルを提示したかを表示
+- **Load**: LLM が `load_skill` を呼び出しスキルの詳細を取得したタイミングを追跡
+- **Execute**: スキルスクリプトの実行とその結果を時系列で表示
+- ハンドオフの流れをオーケストレーショングラフと合わせて確認
+
+---
+
+## 参考リンク
+
+- [Agent skills](https://learn.microsoft.com/ja-jp/agent-framework/agents/skills?pivots=programming-language-python)

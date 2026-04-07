@@ -6,5 +6,6 @@ __pycache__/
 .vscode/*.log
 data/uploads/
 dbg_server.log
+server_debug.log
 stderr_test.txt
 test_outputs/
