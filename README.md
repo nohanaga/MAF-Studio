@@ -31,7 +31,7 @@
 4. Azure AI Foundry を使う場合はターミナルで認証します
 
    ```bash
-   az login
+   az login --use-device-code
    ```
 
 5. サーバーを起動します
