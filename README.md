@@ -15,21 +15,71 @@
 
 ## 1. セットアップ
 
-```powershell
+### GitHub Codespaces（推奨）
+
+[![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/matayuuu/MAF-Studio?quickstart=1)
+
+1. 上のバッジをクリックして Codespace を作成
+2. コンテナ起動後、依存関係のインストールと `.env` ファイルの作成が自動で行われます
+
+   > **自動セットアップが失敗した場合** は手動で実行してください:
+   >
+   > ```bash
+   > python -m pip install -r requirements.txt
+   > cp .env.example .env
+   > ```
+
+3. `.env` を編集して、使用するプロバイダーの値を設定します
+
+4. Azure AI Foundry を使う場合はターミナルで認証します
+
+   ```bash
+   az login --use-device-code
+   ```
+
+5. サーバーを起動します
+
+   ```
+   Ctrl+Shift+P  →  Tasks: Run Task  →  Start MAF Studio
+   ```
+
+   ポート 8000 が自動的にブラウザに転送されて開きます。
+
+### ローカル環境
+
+```bash
 cd <repo_dir>
 python -m venv .venv
-.venv\Scripts\python.exe -m pip install -r requirements.txt
-```
 
-`.env.example` を `.env` にコピーして、使用するプロバイダーの値を設定します。
+# Windows
+.venv\Scripts\activate
+# macOS / Linux
+source .venv/bin/activate
+
+pip install -r requirements.txt
+cp .env.example .env
+# .env を編集して API キーなどを入力
+```
 
 ---
 
 ## 2. 起動
 
-```powershell
-cd <repo_dir>
-.venv\Scripts\python.exe -m uvicorn app.main:app --reload
+### Codespaces
+
+`Ctrl+Shift+P` → **Tasks: Run Task** から以下を選択します。
+
+| タスク | 説明 |
+|---|---|
+| **Start MAF Studio** | MAF Studio をポート 8000 で起動 |
+| **Start Demo CRM App** | デモ用 CRM アプリをポート 8001 で起動 |
+| **Start All Servers** | 両サーバーを並列起動 |
+
+### ローカル環境
+
+```bash
+# venv を有効化した状態で
+uvicorn app.main:app --reload
 ```
 
 ブラウザーで `http://127.0.0.1:8000` を開きます。
