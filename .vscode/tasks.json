@@ -2,9 +2,9 @@
   "version": "2.0.0",
   "tasks": [
     {
-      "label": "Run MAF Workflow Studio",
+      "label": "Start MAF Studio",
       "type": "shell",
-      "command": "${command:python.interpreterPath} -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000",
+      "command": "${command:python.interpreterPath} -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000",
       "options": {
         "cwd": "${workspaceFolder}"
       },
@@ -23,6 +23,49 @@
           "beginsPattern": ".*",
           "endsPattern": "Application startup complete|Uvicorn running on"
         }
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "group": "servers"
+      }
+    },
+    {
+      "label": "Start Demo CRM App",
+      "type": "shell",
+      "command": "${command:python.interpreterPath} -m uvicorn demo_app.main:app --reload --host 0.0.0.0 --port 8001",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "isBackground": true,
+      "problemMatcher": {
+        "pattern": [
+          {
+            "regexp": ".*",
+            "file": 1,
+            "location": 2,
+            "message": 3
+          }
+        ],
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": ".*",
+          "endsPattern": "Application startup complete|Uvicorn running on"
+        }
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "group": "servers"
+      }
+    },
+    {
+      "label": "Start All Servers",
+      "dependsOn": ["Start MAF Studio", "Start Demo CRM App"],
+      "dependsOrder": "parallel",
+      "group": {
+        "kind": "build",
+        "isDefault": true
       }
     }
   ]
