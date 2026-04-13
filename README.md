@@ -22,9 +22,25 @@
 1. 上のバッジをクリックして Codespace を作成
 2. コンテナ起動後、依存関係は自動でインストールされます
 3. `.env.example` を `.env` にコピーして、使用するプロバイダーの値を設定します
-4. **「Start MAF Studio」タスクを実行**してサーバーを起動（ポート 8000 が自動でブラウザに開かれます）
 
-> **Note**: Azure AI Foundry を使う場合はターミナルで `az login` を実行してください。
+   ```bash
+   cp .env.example .env
+   # .env を編集して API キーなどを入力
+   ```
+
+4. Azure AI Foundry を使う場合はターミナルで認証します
+
+   ```bash
+   az login
+   ```
+
+5. サーバーを起動します
+
+   ```
+   Ctrl+Shift+P  →  Tasks: Run Task  →  Start MAF Studio
+   ```
+
+   ポート 8000 が自動的にブラウザに転送されて開きます。
 
 ### ローカル環境
 
