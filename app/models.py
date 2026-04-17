@@ -7,6 +7,7 @@ from uuid import uuid4
 from pydantic import BaseModel, Field
 
 EdgeType = Literal["direct", "conditional", "switch-case", "multi-selection", "fan-in"]
+WorkflowPatternType = Literal["graph", "sequential", "concurrent", "group-chat"]
 ProviderType = Literal["mock", "openai", "azure-openai", "foundry"]
 
 
@@ -91,6 +92,8 @@ class WorkflowDefinition(BaseModel):
     name: str = "New Workflow"
     description: str = ""
     input_text: str = "Review the proposal and return a concise decision."
+    pattern: WorkflowPatternType = "graph"
+    max_rounds: int = 6
     start_node_id: str | None = None
     nodes: list[WorkflowNode] = Field(default_factory=list)
     edges: list[WorkflowEdge] = Field(default_factory=list)

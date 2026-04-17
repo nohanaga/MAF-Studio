@@ -34,7 +34,7 @@
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>
           <span>Skills</span>
         </a>
-        <a class="nav-item" data-page="workflows" data-label="Workflows" href="#workflows" style="display:none">
+        <a class="nav-item" data-page="workflows" data-label="Workflows" href="#workflows">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
           <span>Workflows</span>
         </a>
@@ -332,15 +332,33 @@
       </section>
 
       <!-- ============== PAGE: Workflows ============== -->
-      <section id="page-workflows" class="page" style="display:none">
+      <section id="page-workflows" class="page">
         <div class="wf-toolbar">
           <div class="field-row four-col">
             <div class="field"><label>Name</label><input id="workflow-name" type="text" value="New Workflow" /></div>
+            <div class="field"><label>Pattern</label>
+              <select id="workflow-pattern">
+                <option value="graph">graph (WorkflowBuilder)</option>
+                <option value="sequential">sequential (SequentialBuilder)</option>
+                <option value="concurrent">concurrent (ConcurrentBuilder)</option>
+                <option value="group-chat">group-chat (GroupChatBuilder)</option>
+              </select>
+            </div>
             <div class="field"><label>Start node</label><select id="workflow-start"></select></div>
             <div class="field"><label>Agent</label>
               <div class="inline-row"><select id="node-agent-select"></select><button id="add-node-btn" class="btn btn-ghost btn-sm">+ Node</button></div>
             </div>
             <div class="field"><label>Description</label><input id="workflow-description" type="text" value="Compose agents into a deterministic workflow." /></div>
+          </div>
+          <div class="field-row two-col">
+            <div class="field">
+              <label>Group chat max rounds</label>
+              <input id="workflow-max-rounds" type="number" min="1" max="30" value="6" />
+            </div>
+            <div class="field">
+              <label>Pattern notes</label>
+              <div id="workflow-pattern-note" class="form-hint">graph は Edge Builder を使います。sequential / concurrent / group-chat はノード順で実行されます。</div>
+            </div>
           </div>
         </div>
 

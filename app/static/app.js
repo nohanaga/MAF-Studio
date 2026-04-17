@@ -56,6 +56,8 @@ function createBlankWorkflow() {
     id: createId("wf"), name: "New Workflow",
     description: "Compose multiple Agent Framework agents into a deterministic workflow.",
     input_text: "Review the proposal and produce a final recommendation.",
+    pattern: "graph",
+    max_rounds: 6,
     start_node_id: null, nodes: [], edges: [],
   };
 }
@@ -66,7 +68,7 @@ function createBlankWorkflow() {
 const PAGE_META = {
   agents:    { title: "Agents",    subtitle: "Create and test Agent Framework agents with model, instructions, MCP tools, and file-based skills." },
   skills:    { title: "Skills",    subtitle: "Manage file-based skills — upload folders or files, and run Python scripts via local subprocess." },
-  workflows: { title: "Workflows", subtitle: "Build deterministic workflows with multiple agents and diverse edge types." },
+  workflows: { title: "Workflows", subtitle: "Build graph / sequential / concurrent / group-chat patterns with Agent Framework orchestrations." },
   handoffs:  { title: "Handoffs",  subtitle: "Build HandoffBuilder orchestrations — select participants, define routing rules, visualize the mesh, and test interactively." },
   skillviz:  { title: "Skill Visualization", subtitle: "Dashboard: watch Agent Skills advertise, load, and execute in real time — alongside the live handoff orchestration graph." },
   console:   { title: "Console",   subtitle: "Activity log, runtime tips, and status information." },
@@ -606,8 +608,26 @@ function loadWorkflow(wf) {
   $("#workflow-name").value = wf.name || "New Workflow";
   $("#workflow-description").value = wf.description || "";
   $("#workflow-prompt").value = wf.input_text || "";
+  $("#workflow-pattern").value = wf.pattern || "graph";
+  $("#workflow-max-rounds").value = Math.max(1, Math.min(30, Number(wf.max_rounds || 6)));
+  updateWorkflowPatternUI();
   populateWorkflowSelects();
   renderWorkflowCanvas();
+}
+
+function updateWorkflowPatternUI() {
+  const pattern = $("#workflow-pattern").value || "graph";
+  const edgePanel = document.querySelector(".wf-edge-panel");
+  const maxRoundsField = $("#workflow-max-rounds")?.closest(".field");
+  const note = $("#workflow-pattern-note");
+  const isGraph = pattern === "graph";
+  if (edgePanel) edgePanel.style.display = isGraph ? "" : "none";
+  if (maxRoundsField) maxRoundsField.style.display = pattern === "group-chat" ? "" : "none";
+  if (note) {
+    note.textContent = isGraph
+      ? "graph は Edge Builder でルーティングを定義します。"
+      : "sequential / concurrent / group-chat はノード順で実行され、Edge Builder は使いません。";
+  }
 }
 
 const EDGE_COLORS = {
@@ -1374,6 +1394,10 @@ function addNode() {
 }
 
 function addEdge() {
+  if (($("#workflow-pattern").value || "graph") !== "graph") {
+    log("Edge Builder is only available for graph pattern.");
+    return;
+  }
   const source = $("#edge-source").value;
   const target = $("#edge-target").value;
   if (!source || !target || source === target) { log("Choose two different nodes."); return; }
@@ -1394,6 +1418,8 @@ function collectWorkflow() {
     name: $("#workflow-name").value.trim() || "New Workflow",
     description: $("#workflow-description").value.trim(),
     input_text: $("#workflow-prompt").value.trim(),
+    pattern: $("#workflow-pattern").value || "graph",
+    max_rounds: Math.max(1, Math.min(30, Number($("#workflow-max-rounds").value || 6))),
     start_node_id: $("#workflow-start").value || studio.currentWorkflow.start_node_id,
   };
 }
@@ -3607,6 +3633,7 @@ function bindEvents() {
   // Workflow
   $("#add-node-btn").addEventListener("click", addNode);
   $("#add-edge-btn").addEventListener("click", addEdge);
+  $("#workflow-pattern").addEventListener("change", updateWorkflowPatternUI);
   $("#save-workflow-btn").addEventListener("click", saveWorkflow);
   $("#test-workflow-btn").addEventListener("click", testWorkflow);
   // Console
