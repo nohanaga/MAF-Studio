@@ -1,0 +1,57 @@
+name: Agent task
+description: Structured task template for GitHub Copilot cloud agent
+labels: ["agent-task"]
+body:
+  - type: textarea
+    id: background
+    attributes:
+      label: Background
+      description: Why is this work needed?
+    validations:
+      required: true
+
+  - type: textarea
+    id: objective
+    attributes:
+      label: Objective
+      description: What outcome is expected?
+    validations:
+      required: true
+
+  - type: textarea
+    id: scope
+    attributes:
+      label: In scope
+      description: What may be changed?
+    validations:
+      required: true
+
+  - type: textarea
+    id: out_of_scope
+    attributes:
+      label: Out of scope
+      description: What must not be changed?
+    validations:
+      required: false
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: Define observable completion conditions.
+      placeholder: |
+        - [ ] Condition 1
+        - [ ] Condition 2
+    validations:
+      required: true
+
+  - type: textarea
+    id: validation
+    attributes:
+      label: Validation
+      description: What tests or checks must pass?
+      placeholder: |
+        make validate
+        npm test
+    validations:
+      required: true
