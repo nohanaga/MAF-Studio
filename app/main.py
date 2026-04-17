@@ -60,6 +60,7 @@ async def get_state() -> dict[str, object]:
     return {
         "state": state.model_dump(mode="json"),
         "edgeTypes": ["direct", "conditional", "switch-case", "multi-selection", "fan-in"],
+        "workflowPatterns": ["graph", "sequential", "concurrent", "group-chat"],
         "tips": [
             "Use folder upload for complete file-based skills (SKILL.md + scripts + references).",
             "Set provider env vars to switch agent tests from mock preview to live model execution.",
